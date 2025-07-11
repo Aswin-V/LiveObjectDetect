@@ -12,6 +12,7 @@ import json
 import os
 import logging
 from PIL import Image
+from ultralytics import YOLO
 
 # --- Logging Configuration ---
 # Configure logging to display the time, log level, and message.
@@ -37,7 +38,7 @@ st.sidebar.title("Configuration")
 # Create a dropdown menu (selectbox) in the sidebar for choosing the analysis model.
 model_selection = st.sidebar.selectbox(
     "Choose the analysis model",
-    ("Gemini", "YOLOv3")
+    ("Gemini", "YOLO")
 )
 logging.info(f"Model selected: {model_selection}")
 
@@ -47,6 +48,7 @@ st.sidebar.markdown("---")
 # Initialize configuration variables with default values to prevent NameError.
 api_key_input = ""
 confidence_threshold = 0.5
+yolo_model_name = "yolov8n.pt" # Default model
 
 # Display different UI elements in the sidebar based on the selected model.
 if model_selection == "Gemini":
@@ -56,6 +58,9 @@ if model_selection == "Gemini":
         type="password", 
         help="You can get your key from Google AI Studio."
     )
+    if api_key_input:
+        st.session_state.gemini_api_key = api_key_input
+
     # Display informational text about the Gemini model's capabilities and requirements.
     st.sidebar.info("""
     **Gemini Model:**
@@ -63,35 +68,43 @@ if model_selection == "Gemini":
     - Detects objects, human emotions, and activities.
     - Slower due to API calls.
     """)
-elif model_selection == "YOLOv3":
+elif model_selection == "YOLO":
+    # --- YOLO Version and Size Selection ---
+    yolo_version = st.sidebar.selectbox("YOLO Version", ["v8", "v9", "v10"], help="Choose the YOLO architecture.")
+    
+    yolo_sizes = {
+        "v8": ['n', 's', 'm', 'l', 'x'],
+        "v9": ['c', 'e'],
+        "v10": ['n', 's', 'm', 'l', 'x']
+    }
+    yolo_size = st.sidebar.selectbox("Model Size", yolo_sizes[yolo_version], help="Nano is fastest, X is most accurate.")
+    
+    # Construct the model name based on user selection
+    yolo_model_name = f"yolo{yolo_version}{yolo_size}.pt"
+
     # Add a slider to control the confidence threshold for YOLO detections.
     confidence_threshold = st.sidebar.slider(
-        "YOLO Confidence Threshold", 0.0, 1.0, 0.5, 0.05,
+        "Confidence Threshold", 0.0, 1.0, 0.25, 0.05,
         help="Adjust to show more or fewer detections."
     )
     # Display informational text about the YOLO model.
-    st.sidebar.info("""
-    **YOLOv3 Model:**
-    - Runs locally (faster).
+    st.sidebar.info(f"""
+    **YOLO Model:**
+    - **Selected:** `{yolo_model_name}`
+    - Runs locally (very fast).
     - Detects a wide range of objects.
     - Does **not** detect emotions or activities.
-    """)
-    # Display a warning with setup instructions for the user.
-    st.sidebar.warning("""
-    **Setup Required for YOLO:**
-    Please download the following files and place them in the same directory as this script:
-    1. `yolov3.weights`
-    2. `yolov3.cfg`
-    3. `coco.names`
+    - The model file will be downloaded automatically on the first run.
     """)
 
 # --- Helper Functions ---
 
-def get_gemini_analysis(frame: np.ndarray, prompt: str, api_key: str) -> dict | None:
+def get_gemini_analysis(frame: np.ndarray, prompt: str) -> dict | None:
     """
     Sends a single frame to the Gemini API for analysis.
     """
     logging.info("Attempting Gemini analysis.")
+    api_key = st.session_state.get("gemini_api_key")
     if not api_key:
         logging.error("Gemini API Key is missing.")
         st.error("Please enter your Gemini API Key in the sidebar.")
@@ -144,40 +157,30 @@ def get_gemini_analysis(frame: np.ndarray, prompt: str, api_key: str) -> dict | 
         st.text(f"Received text: {response.text}")
         return None
 
-def run_yolo_detection(frame: np.ndarray, net, output_layers, classes, confidence_thresh: float):
+def run_yolo_detection(frame: np.ndarray, model, confidence_thresh: float):
     """
-    Runs YOLO object detection on a single frame.
+    Runs YOLOv8/v9/v10 object detection on a single frame using the ultralytics library.
     """
-    logging.info(f"Running YOLO detection with confidence threshold: {confidence_thresh}")
-    height, width, _ = frame.shape
-    blob = cv2.dnn.blobFromImage(frame, 0.00392, (416, 416), (0, 0, 0), True, crop=False)
-    net.setInput(blob)
-    outs = net.forward(output_layers)
+    logging.info(f"Running YOLO detection with model {model.ckpt_path.split('/')[-1]} and confidence {confidence_thresh}")
+    # Perform inference, specifying confidence and disabling verbose output
+    results = model(frame, conf=confidence_thresh, verbose=False)
 
-    class_ids, confidences, boxes, detections = [], [], [], []
+    detections = []
+    # Ultralytics returns a list of results, we take the first one for our single image
+    result = results[0]
 
-    for out in outs:
-        for detection in out:
-            scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
-            if confidence > confidence_thresh:
-                center_x, center_y = int(detection[0] * width), int(detection[1] * height)
-                w, h = int(detection[2] * width), int(detection[3] * height)
-                x, y = int(center_x - w / 2), int(center_y - h / 2)
-                boxes.append([x, y, w, h])
-                confidences.append(float(confidence))
-                class_ids.append(class_id)
+    # Get bounding boxes, confidences, and class IDs
+    boxes = result.boxes.xyxyn.cpu().numpy()  # Normalized [x_min, y_min, x_max, y_max]
+    confs = result.boxes.conf.cpu().numpy()
+    class_ids = result.boxes.cls.cpu().numpy().astype(int)
 
-    indexes = cv2.dnn.NMSBoxes(boxes, confidences, confidence_thresh, 0.4)
-    
-    if len(indexes) > 0:
-        for i in indexes.flatten():
-            x, y, w, h = boxes[i]
-            label = str(classes[class_ids[i]])
-            norm_box = [x / width, y / height, (x + w) / width, (y + h) / height]
-            detections.append({"label": label, "box": norm_box, "confidence": confidences[i]})
-    
+    for i in range(len(boxes)):
+        detections.append({
+            "label": model.names[class_ids[i]],
+            "box": boxes[i].tolist(), # The box is already normalized
+            "confidence": float(confs[i])
+        })
+
     logging.info(f"YOLO found {len(detections)} objects.")
     return {"detections": detections}
 
@@ -205,22 +208,22 @@ def draw_annotations(frame: np.ndarray, detections: list) -> np.ndarray:
 
 # --- Main Application Logic ---
 
-# Load YOLO model files if YOLO is selected
-yolo_net, yolo_output_layers, yolo_classes = None, None, None
-if model_selection == "YOLOv3":
-    logging.info("Checking for YOLO model files.")
-    weights_path, cfg_path, names_path = "yolov3.weights", "yolov3.cfg", "coco.names"
-    if all(os.path.exists(p) for p in [weights_path, cfg_path, names_path]):
-        logging.info("YOLO files found. Loading model.")
-        yolo_net = cv2.dnn.readNet(weights_path, cfg_path)
-        with open(names_path, "r") as f:
-            yolo_classes = [line.strip() for line in f.readlines()]
-        layer_names = yolo_net.getLayerNames()
-        yolo_output_layers = [layer_names[i - 1] for i in yolo_net.getUnconnectedOutLayers().flatten()]
-        logging.info("YOLO model loaded successfully.")
-    else:
-        logging.error("YOLO model files not found.")
-        st.error("YOLO model files not found. Please follow setup instructions.")
+# Load YOLO model if selected.
+# Using st.cache_resource ensures the model is loaded only once.
+yolo_model = None
+if model_selection == "YOLO":
+    @st.cache_resource
+    def load_yolo_model(model_name):
+        logging.info(f"Loading YOLO model: {model_name}")
+        try:
+            model = YOLO(model_name)
+            logging.info(f"YOLO model '{model_name}' loaded successfully.")
+            return model
+        except Exception as e:
+            logging.error(f"Error loading YOLO model {model_name}: {e}")
+            st.error(f"Error loading YOLO model: {e}")
+            return None
+    yolo_model = load_yolo_model(yolo_model_name)
 
 st.markdown("---")
 input_source = st.radio("Select Input Source", ("Upload a video file", "Use live webcam feed"), horizontal=True)
@@ -257,9 +260,9 @@ def process_video(video_capture, is_live=False):
                 logging.info(f"Processing frame number: {frame_num}")
                 analysis = None
                 if model_selection == "Gemini":
-                    analysis = get_gemini_analysis(frame, prompt, api_key_input)
-                elif model_selection == "YOLOv3" and yolo_net:
-                    analysis = run_yolo_detection(frame, yolo_net, yolo_output_layers, yolo_classes, confidence_threshold)
+                    analysis = get_gemini_analysis(frame, prompt)
+                elif model_selection == "YOLO" and yolo_model:
+                    analysis = run_yolo_detection(frame, yolo_model, confidence_threshold)
 
                 annotated_frame = frame
                 if analysis and analysis.get("detections"):
@@ -295,20 +298,18 @@ if input_source == "Upload a video file":
         process_video(video_capture)
 
 elif input_source == "Use live webcam feed":
-    col1, col2 = st.columns(2)
-    if col1.button("Start Webcam"):
-        logging.info("Start Webcam button clicked.")
-        st.session_state.stop = False
-    if col2.button("Stop Webcam"):
-        logging.info("Stop Webcam button clicked.")
-        st.session_state.stop = True
+    # Use a checkbox for a more intuitive and stateful UI control
+    run_webcam = st.checkbox("Start live webcam feed")
 
-    if not st.session_state.stop:
+    if run_webcam:
         logging.info("Starting webcam feed.")
         video_capture = cv2.VideoCapture(0)
         if not video_capture.isOpened():
             logging.error("Could not open webcam.")
             st.error("Could not open webcam. Please grant access and refresh.")
         else:
+            st.session_state.stop = False # Ensure stop is False when starting
             logging.info("Webcam opened successfully.")
             process_video(video_capture, is_live=True)
+    else:
+        st.session_state.stop = True # Ensure stop is True when checkbox is unchecked
