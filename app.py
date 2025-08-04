@@ -1,6 +1,6 @@
 # --- Installation ---
 # Before running, please install the required libraries by running the following command in your terminal:
-# pip install streamlit opencv-python-headless requests numpy Pillow
+# pip install streamlit opencv-python-headless requests numpy Pillow ultralytics deepface
 
 import streamlit as st
 import cv2
@@ -13,6 +13,7 @@ import os
 import logging
 from PIL import Image
 from ultralytics import YOLO
+from deepface import DeepFace
 
 # --- Logging Configuration ---
 # Configure logging to display the time, log level, and message.
@@ -38,7 +39,7 @@ st.sidebar.title("Configuration")
 # Create a dropdown menu (selectbox) in the sidebar for choosing the analysis model.
 model_selection = st.sidebar.selectbox(
     "Choose the analysis model",
-    ("Gemini", "YOLO")
+    ("Gemini", "YOLO", "DeepFace")
 )
 logging.info(f"Model selected: {model_selection}")
 
@@ -96,8 +97,19 @@ elif model_selection == "YOLO":
     - Does **not** detect emotions or activities.
     - The model file will be downloaded automatically on the first run.
     """)
+elif model_selection == "DeepFace":
+    st.sidebar.info("""
+    **DeepFace Model:**
+    - Runs locally.
+    - Detects faces and analyzes age, gender, and ethnicity.
+    - The model files for face detection and analysis will be downloaded automatically on the first run.
+    """)
+
 
 # --- Helper Functions ---
+
+# Define the Gemini API URL as a constant for easy modification.
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 def get_gemini_analysis(frame: np.ndarray, prompt: str) -> dict | None:
     """
@@ -110,8 +122,6 @@ def get_gemini_analysis(frame: np.ndarray, prompt: str) -> dict | None:
         st.error("Please enter your Gemini API Key in the sidebar.")
         return None
 
-    GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-    
     is_success, buffer = cv2.imencode(".jpg", frame)
     if not is_success:
         logging.error("Failed to encode frame to JPEG.")
@@ -155,6 +165,52 @@ def get_gemini_analysis(frame: np.ndarray, prompt: str) -> dict | None:
         logging.error(f"Failed to parse JSON from Gemini response: {e}")
         st.error(f"Failed to parse JSON from API response: {e}")
         st.text(f"Received text: {response.text}")
+        return None
+
+def run_deepface_analysis(frame: np.ndarray) -> dict | None:
+    """
+    Runs DeepFace analysis on a single frame for age, gender, and ethnicity.
+    """
+    logging.info("Attempting DeepFace analysis.")
+    try:
+        # DeepFace expects BGR format, which is what OpenCV provides.
+        # It will raise a ValueError if no face is found.
+        results = DeepFace.analyze(
+            img_path=frame,
+            actions=['age', 'gender', 'race'],
+            enforce_detection=True,
+            detector_backend='opencv'
+        )
+
+        detections = []
+        height, width, _ = frame.shape
+
+        # DeepFace returns a list of dicts, one for each detected face
+        for face_data in results:
+            region = face_data['region']
+            x, y, w, h = region['x'], region['y'], region['w'], region['h']
+            
+            box = [x / width, y / height, (x + w) / width, (y + h) / height]
+
+            age = face_data['age']
+            gender = face_data['dominant_gender']
+            race = face_data['dominant_race']
+            label = f"{gender}, {age}, {race}"
+
+            detections.append({
+                "label": label, "box": box, "age": age,
+                "dominant_gender": gender, "dominant_race": race
+            })
+
+        logging.info(f"DeepFace found {len(detections)} faces.")
+        return {"detections": detections}
+
+    except ValueError:
+        logging.info("DeepFace: No face detected in the frame.")
+        return {"detections": []}
+    except Exception as e:
+        logging.error(f"DeepFace analysis failed: {e}")
+        st.warning(f"An error occurred during DeepFace analysis. See console for details.")
         return None
 
 def run_yolo_detection(frame: np.ndarray, model, confidence_thresh: float):
@@ -242,20 +298,32 @@ if 'stop' not in st.session_state:
 def process_video(video_capture, is_live=False):
     """
     A generic function to process video from either a file or a webcam.
+    It displays every frame for smooth playback and overlays the latest analysis.
     """
-    image_placeholder, results_placeholder = st.empty(), st.empty()
-    frame_interval = 30 if is_live else int(video_capture.get(cv2.CAP_PROP_FPS) or 1)
+    image_placeholder = st.empty()
+    results_placeholder = st.empty()
+
+    # Set the analysis interval. For live video, analyze more frequently.
+    if is_live:
+        frame_interval = 10  # Analyze every 10 frames for a responsive feel
+    else:
+        fps = video_capture.get(cv2.CAP_PROP_FPS) or 30
+        frame_interval = int(fps)  # Analyze once per second for uploaded videos
+
     frame_num = 0
+    latest_analysis = None  # To store the most recent analysis results
 
     spinner_text = "Live analysis in progress..." if is_live else "Processing video..."
     with st.spinner(spinner_text):
         while True:
-            if is_live and st.session_state.stop: break
+            if is_live and st.session_state.stop:
+                break
             success, frame = video_capture.read()
             if not success:
                 logging.info("End of video file or stream.")
                 break
 
+            # --- Analysis Section (runs periodically) ---
             if frame_num % frame_interval == 0:
                 logging.info(f"Processing frame number: {frame_num}")
                 analysis = None
@@ -263,29 +331,39 @@ def process_video(video_capture, is_live=False):
                     analysis = get_gemini_analysis(frame, prompt)
                 elif model_selection == "YOLO" and yolo_model:
                     analysis = run_yolo_detection(frame, yolo_model, confidence_threshold)
+                elif model_selection == "DeepFace":
+                    analysis = run_deepface_analysis(frame)
 
-                annotated_frame = frame
+                # If analysis was successful, update the latest results and the JSON display
                 if analysis and analysis.get("detections"):
                     logging.info(f"Found {len(analysis['detections'])} detections in frame {frame_num}.")
-                    annotated_frame = draw_annotations(frame.copy(), analysis["detections"])
+                    latest_analysis = analysis  # Store the new analysis
                     with results_placeholder.container():
-                        st.subheader("Analysis Results")
-                        st.json(analysis)
+                        st.subheader("Latest Analysis Results")
+                        st.json(latest_analysis)
                 else:
                     logging.warning(f"No analysis results for frame {frame_num}.")
                     with results_placeholder.container():
-                        st.warning("No analysis results for this frame.")
-                
-                rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                caption = "Live Webcam Feed" if is_live else f"Frame {frame_num}"
-                image_placeholder.image(rgb_frame, caption=caption, use_column_width=True)
-            
+                        st.warning("No new analysis results for this frame.")
+
+            # --- Display Section (runs for every frame) ---
+            annotated_frame = frame.copy()
+            if latest_analysis and latest_analysis.get("detections"):
+                # Draw annotations from the latest analysis onto the current frame
+                annotated_frame = draw_annotations(annotated_frame, latest_analysis["detections"])
+
+            rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+            caption = "Live Webcam Feed" if is_live else f"Frame {frame_num}"
+            image_placeholder.image(rgb_frame, caption=caption, use_container_width=True)
+
             frame_num += 1
-    
+
     video_capture.release()
     logging.info("Video capture released.")
-    if not is_live: st.success("Video processing complete!")
-    else: st.info("Webcam feed stopped.")
+    if not is_live:
+        st.success("Video processing complete!")
+    else:
+        st.info("Webcam feed stopped.")
 
 if input_source == "Upload a video file":
     st.session_state.stop = True

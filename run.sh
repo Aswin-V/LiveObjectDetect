@@ -3,7 +3,7 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-VENV_DIR="env"
+VENV_DIR=".venv"
 PYTHON_CMD="python3"
 
 echo "--- Setting up AI Video Analysis Environment ---"

@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 
-VENV_DIR = "env"
+VENV_DIR = ".venv"
 REQUIREMENTS_FILE = "requirements.txt"
 
 def get_executable(name):

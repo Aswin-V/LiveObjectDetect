@@ -4,3 +4,6 @@ requests
 numpy
 Pillow
 ultralytics
+deepface
+tensorflow
+tf-keras
