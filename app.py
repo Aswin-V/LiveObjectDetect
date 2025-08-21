@@ -262,6 +262,48 @@ def draw_annotations(frame: np.ndarray, detections: list) -> np.ndarray:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     return frame
 
+def process_image(image_file):
+    """
+    Processes a single uploaded image file.
+    """
+    image_placeholder = st.empty()
+    results_placeholder = st.empty()
+
+    # Convert uploaded file to an OpenCV image
+    image = Image.open(image_file).convert("RGB")
+    frame = np.array(image)
+    # Convert RGB to BGR for OpenCV
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    with st.spinner("Analyzing image..."):
+        logging.info(f"Processing uploaded image: {image_file.name}")
+        analysis = None
+
+        if model_selection == "Gemini":
+            analysis = get_gemini_analysis(frame, prompt)
+        elif model_selection == "YOLO" and yolo_model:
+            analysis = run_yolo_detection(frame, yolo_model, confidence_threshold)
+        elif model_selection == "DeepFace":
+            analysis = run_deepface_analysis(frame)
+
+        if analysis and analysis.get("detections"):
+            logging.info(f"Found {len(analysis['detections'])} detections in the image.")
+            annotated_frame = frame.copy()
+            annotated_frame = draw_annotations(annotated_frame, analysis["detections"])
+            rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+            image_placeholder.image(rgb_frame, caption="Analyzed Image", use_container_width=True)
+
+            with results_placeholder.container():
+                st.subheader("Analysis Results")
+                st.json(analysis)
+        else:
+            logging.warning("No analysis results for the image.")
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image_placeholder.image(rgb_frame, caption="Uploaded Image (no detections)", use_container_width=True)
+            with results_placeholder.container():
+                st.warning("No detections found in the image.")
+    st.success("Image analysis complete!")
+
 # --- Main Application Logic ---
 
 # Load YOLO model if selected.
@@ -282,11 +324,11 @@ if model_selection == "YOLO":
     yolo_model = load_yolo_model(yolo_model_name)
 
 st.markdown("---")
-input_source = st.radio("Select Input Source", ("Upload a video file", "Use live webcam feed"), horizontal=True)
+input_source = st.radio("Select Input Source", ("Upload an image file", "Upload a video file", "Use live webcam feed"), horizontal=True)
 logging.info(f"Input source selected: {input_source}")
 
 prompt = (
-    "Analyze this video frame. Identify all objects and provide their bounding boxes "
+    "Analyze this image. Identify all objects and provide their bounding boxes "
     "in the format [x_min, y_min, x_max, y_max] as normalized coordinates (0.0 to 1.0). "
     "If humans are present, identify their emotions and describe what they are doing. "
     "Provide the output as a JSON object with a key 'detections' which is an array of objects."
@@ -365,7 +407,14 @@ def process_video(video_capture, is_live=False):
     else:
         st.info("Webcam feed stopped.")
 
-if input_source == "Upload a video file":
+if input_source == "Upload an image file":
+    st.session_state.stop = True
+    uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
+    if uploaded_file:
+        logging.info(f"File uploaded: {uploaded_file.name}")
+        process_image(uploaded_file)
+
+elif input_source == "Upload a video file":
     st.session_state.stop = True
     uploaded_file = st.file_uploader("Choose a video file", type=["mp4", "mov", "avi"])
     if uploaded_file:
