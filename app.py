@@ -9,6 +9,7 @@ import logging
 import os
 from PIL import Image
 from ultralytics import YOLO
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from analyzers import GeminiAnalyzer, YoloAnalyzer, DeepfaceAnalyzer
@@ -38,6 +39,11 @@ def load_yolo_model(model_name):
     model = YOLO(model_name)
     logging.info(f"YOLO model '{model_name}' loaded successfully.")
     return model
+
+@st.cache_resource
+def get_thread_pool():
+    """Creates and returns a thread pool executor."""
+    return ThreadPoolExecutor(max_workers=1)
 
 # --- UI Setup ---
 # Configure the Streamlit page with a title and wide layout for better video display.
@@ -155,10 +161,19 @@ def draw_annotations(frame: np.ndarray, detections: list) -> np.ndarray:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     return frame
 
+def _analyze_frame_in_thread(analyzer, frame, frame_num):
+    """
+    Helper to run analysis in a separate thread.
+    Returns the analysis result, the original frame, and the frame number.
+    """
+    analysis = analyzer.analyze_frame(frame)
+    return analysis, frame, frame_num
+
 def process_image(image_file):
     """
     Processes a single uploaded image file.
     """
+    st.markdown("### Analyzed Image")
     image_placeholder = st.empty()
     results_placeholder = st.empty()
 
@@ -194,7 +209,7 @@ def process_image(image_file):
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image_placeholder.image(rgb_frame, caption="Uploaded Image (no detections)", use_container_width=True)
             with results_placeholder.container():
-                st.warning("No detections found in the image.")
+                st.info("No detections found in the image.")
     st.success("Image analysis complete!")
 
 # --- Main Application Logic ---
@@ -230,108 +245,210 @@ except ValueError as e:
     logging.error(f"Error initializing analyzer: {e}")
     st.stop()
 
+# --- Session State Initialization ---
+if 'webcam_running' not in st.session_state:
+    st.session_state.webcam_running = False
+if 'analysis_future' not in st.session_state:
+    st.session_state.analysis_future = None
+# 'stopped', 'running', 'paused'
+if 'processing_state' not in st.session_state:
+    st.session_state.processing_state = 'stopped'
+if 'latest_analysis' not in st.session_state:
+    st.session_state.latest_analysis = None
+if 'video_capture' not in st.session_state:
+    st.session_state.video_capture = None
+if 'latest_annotated_frame' not in st.session_state:
+    st.session_state.latest_annotated_frame = None
 
-if 'stop' not in st.session_state:
-    st.session_state.stop = False
-
-def process_video(video_capture, is_live=False):
+def process_video(is_live=False):
     """
     A generic function to process video from either a file or a webcam.
     It displays every frame for smooth playback and overlays the latest analysis.
     """
-    image_placeholder = st.empty()
+    # Create placeholders for the video feeds and results
+    if is_live:
+        col1, col2 = st.columns(2)
+        col1.markdown("### Live Feed")
+        live_placeholder = col1.empty()
+        col2.markdown("### Processed Feed")
+        processed_placeholder = col2.empty()
+        if st.session_state.processing_state == 'stopped':
+            processed_placeholder.info("Processing is stopped. Press 'Start Processing' to begin.")
+    else:
+        st.markdown("### Processed Feed")
+        processed_placeholder = st.empty()
+        processed_placeholder.info("Processing video, please wait...")
+    
     results_placeholder = st.empty()
 
     # Set the analysis interval. For live video, analyze more frequently.
     if is_live:
         frame_interval = 10  # Analyze every 10 frames for a responsive feel
     else:
-        fps = video_capture.get(cv2.CAP_PROP_FPS) or 30
+        fps = st.session_state.video_capture.get(cv2.CAP_PROP_FPS) or 30
         frame_interval = int(fps)  # Analyze once per second for uploaded videos
 
+    # Get the thread pool for running analysis in the background
+    executor = get_thread_pool()
+
     frame_num = 0
-    latest_analysis = None  # To store the most recent analysis results
-
+        
     spinner_text = "Live analysis in progress..." if is_live else "Processing video..."
-    with st.spinner(spinner_text):
-        while True:
-            if is_live and st.session_state.stop:
-                break
-            success, frame = video_capture.read()
-            if not success:
-                logging.info("End of video file or stream.")
-                break
+    # For live, the spinner is less useful since we have explicit controls.
+    if not is_live:
+        st.spinner(spinner_text)
 
-            # --- Analysis Section (runs periodically) ---
-            if frame_num % frame_interval == 0:
-                logging.info(f"Processing frame number: {frame_num}")
-                try:
-                    analysis = analyzer.analyze_frame(frame)
-                    # If analysis was successful, update the latest results and the JSON display
-                    if analysis and analysis.get("detections"):
-                        logging.info(f"Found {len(analysis['detections'])} detections in frame {frame_num}.")
-                        latest_analysis = analysis  # Store the new analysis
-                        with results_placeholder.container():
-                            st.subheader("Latest Analysis Results")
-                            st.json(latest_analysis)
-                    else:
-                        logging.warning(f"No analysis results for frame {frame_num}.")
-                        with results_placeholder.container():
-                            st.warning("No new analysis results for this frame.")
-                except Exception as e:
-                    logging.error(f"Analysis failed for frame {frame_num}: {e}", exc_info=True)
+    while True if not is_live else st.session_state.webcam_running:
+        success, frame = st.session_state.video_capture.read()
+        if not success:
+            logging.info("End of video file or stream.")
+            st.session_state.webcam_running = False # Stop loop if webcam fails
+            break
+        
+        # --- Check for completed analysis (runs for every frame) ---
+        if st.session_state.analysis_future and st.session_state.analysis_future.done():
+            try:
+                analysis, analyzed_frame, analyzed_frame_num = st.session_state.analysis_future.result()
+                if analysis is not None:
+                    st.session_state.latest_analysis = analysis
                     with results_placeholder.container():
-                        st.error(f"An error occurred during analysis: {e}")
+                        st.subheader("Latest Analysis Results")
+                        st.json(st.session_state.latest_analysis)
+                    
+                    # Draw annotations on the frame that was actually analyzed
+                    annotated_frame = draw_annotations(analyzed_frame.copy(), analysis.get("detections", []))
+                    st.session_state.latest_annotated_frame = annotated_frame
+                    
+                    # Update the processed feed placeholder with the new static annotated image
+                    caption = f"Analyzed Frame: {analyzed_frame_num}" if not is_live else "Last Analyzed Frame"
+                    processed_placeholder.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), caption=caption, use_container_width=True)
 
-            # --- Display Section (runs for every frame) ---
+                    num_detections = len(analysis.get("detections", []))
+                    if num_detections > 0:
+                        logging.info(f"Found {num_detections} detections in async result.")
+                else:
+                    logging.warning("Async analysis returned no result.")
+            except Exception as e:
+                logging.error(f"Async analysis failed: {e}", exc_info=True)
+                results_placeholder.error(f"An error occurred during analysis: {e}")
+            st.session_state.analysis_future = None # Clear the future to allow the next one
+
+        # --- Display Section (runs for every frame) ---
+        if is_live:
+            live_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
+        # When paused, we need to continuously redraw the last annotated frame
+        if st.session_state.processing_state == 'paused':
+            if st.session_state.latest_annotated_frame is not None:
+                processed_placeholder.image(
+                    cv2.cvtColor(st.session_state.latest_annotated_frame, cv2.COLOR_BGR2RGB),
+                    caption="Processing Paused",
+                    use_container_width=True
+                )
+            else:
+                processed_placeholder.info("Processing is paused.")
+        else: # For uploaded video, we need to show something on every frame
             annotated_frame = frame.copy()
-            if latest_analysis and latest_analysis.get("detections"):
-                # Draw annotations from the latest analysis onto the current frame
-                annotated_frame = draw_annotations(annotated_frame, latest_analysis["detections"])
+            if st.session_state.latest_analysis:
+                annotated_frame = draw_annotations(annotated_frame, st.session_state.latest_analysis.get("detections", []))
+            processed_placeholder.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), caption=f"Frame {frame_num}", use_container_width=True)
 
-            rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            caption = "Live Webcam Feed" if is_live else f"Frame {frame_num}"
-            image_placeholder.image(rgb_frame, caption=caption, use_container_width=True)
+        # --- Analysis Section (runs periodically) ---
+        # For webcam, check the processing state
+        should_process = st.session_state.processing_state == 'running' if is_live else True
+        if should_process and frame_num % frame_interval == 0 and st.session_state.analysis_future is None:
+            logging.info(f"Submitting frame {frame_num} for async analysis.")
+            # Submit analysis to the thread pool. It will run in the background.
+            st.session_state.analysis_future = executor.submit(_analyze_frame_in_thread, analyzer, frame.copy(), frame_num)
+        elif is_live and frame_num % frame_interval == 0:
+            logging.info(f"Skipping analysis for frame {frame_num}, previous one still running.")
 
-            frame_num += 1
+        frame_num += 1
 
-    video_capture.release()
+    if st.session_state.video_capture:
+        st.session_state.video_capture.release()
+    st.session_state.video_capture = None
     logging.info("Video capture released.")
     if not is_live:
         st.success("Video processing complete!")
     else:
         st.info("Webcam feed stopped.")
+        # Clear placeholders when webcam stops
+        live_placeholder.empty()
+        processed_placeholder.empty()
+        results_placeholder.empty()
 
 if input_source == "Upload an image file":
-    st.session_state.stop = True
+    st.session_state.webcam_running = False
     uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
     if uploaded_file and analyzer:
         logging.info(f"File uploaded: {uploaded_file.name}")
         process_image(uploaded_file)
 
 elif input_source == "Upload a video file":
-    st.session_state.stop = True
+    st.session_state.webcam_running = False
     uploaded_file = st.file_uploader("Choose a video file", type=["mp4", "mov", "avi"])
     if uploaded_file and analyzer:
         logging.info(f"File uploaded: {uploaded_file.name}")
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
             tfile.write(uploaded_file.read())
-            video_capture = cv2.VideoCapture(tfile.name)
-        process_video(video_capture)
+            st.session_state.video_capture = cv2.VideoCapture(tfile.name)
+        process_video(is_live=False)
 
 elif input_source == "Use live webcam feed":
-    # Use a checkbox for a more intuitive and stateful UI control
-    run_webcam = st.checkbox("Start live webcam feed")
+    # Using a single checkbox to control the webcam state is cleaner
+    run_webcam = st.checkbox("Run live webcam feed", value=st.session_state.webcam_running)
 
-    if run_webcam and analyzer:
-        logging.info("Starting webcam feed.")
-        video_capture = cv2.VideoCapture(0)
-        if not video_capture.isOpened():
-            logging.error("Could not open webcam.")
-            st.error("Could not open webcam. Please grant access and refresh.")
+    if run_webcam and not st.session_state.webcam_running:
+        # Just started
+        st.session_state.webcam_running = True
+        st.session_state.processing_state = 'stopped'
+        st.rerun()
+    elif not run_webcam and st.session_state.webcam_running:
+        # Just stopped
+        st.session_state.webcam_running = False
+        st.session_state.processing_state = 'stopped'
+        st.rerun()
+
+    if st.session_state.webcam_running:
+        st.markdown("### Processing Controls")
+        col1, col2, col3 = st.columns(3)
+
+        if col1.button("Start Processing", use_container_width=True, disabled=st.session_state.processing_state == 'running'):
+            st.session_state.processing_state = 'running'
+            st.rerun()
+
+        if col2.button("Pause Processing", use_container_width=True, disabled=st.session_state.processing_state != 'running'):
+            st.session_state.processing_state = 'paused'
+            st.rerun()
+
+        if col3.button("Stop Processing", use_container_width=True, disabled=st.session_state.processing_state == 'stopped'):
+            st.session_state.processing_state = 'stopped'
+            st.session_state.latest_analysis = None
+            st.session_state.latest_annotated_frame = None
+            # We can't easily cancel a future. We'll just ignore its result.
+            st.session_state.analysis_future = None
+            st.rerun()
+        
+        if analyzer:
+            st.info(f"Processing State: **{st.session_state.processing_state.upper()}**")
+            if not st.session_state.video_capture:
+                st.session_state.video_capture = cv2.VideoCapture(0)
+            
+            if not st.session_state.video_capture.isOpened():
+                logging.error("Could not open webcam.")
+                st.error("Could not open webcam. Please grant access and refresh.")
+                st.session_state.webcam_running = False
+                st.session_state.video_capture = None
+            else:
+                logging.info("Webcam opened successfully.")
+                process_video(is_live=True)
         else:
-            st.session_state.stop = False # Ensure stop is False when starting
-            logging.info("Webcam opened successfully.")
-            process_video(video_capture, is_live=True)
+            st.warning("Please select a model to start the webcam feed.")
+            st.session_state.webcam_running = False
+
     else:
-        st.session_state.stop = True # Ensure stop is True when checkbox is unchecked
+        # This block runs when the checkbox is unchecked, ensuring cleanup
+        if st.session_state.video_capture:
+            st.session_state.video_capture.release()
+            st.session_state.video_capture = None
+            logging.info("Webcam capture released on stop.")
