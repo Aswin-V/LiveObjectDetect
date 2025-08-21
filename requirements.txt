@@ -7,3 +7,4 @@ ultralytics
 deepface
 tensorflow
 tf-keras
+python-dotenv

@@ -57,7 +57,9 @@ def main():
     # Using "python -m pip" is more robust than calling the pip executable directly.
     if os.path.exists(REQUIREMENTS_FILE):
         print(f"Installing/updating requirements from {REQUIREMENTS_FILE}...")
-        subprocess.run([python_exe, "-m", "pip", "install", "-r", REQUIREMENTS_FILE], check=True)
+        # Upgrade pip and install requirements quietly
+        # Add "--quiet" to not show all the installations in terminal
+        subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pip", "-r", REQUIREMENTS_FILE], check=True)
     else:
         print(f"Warning: '{REQUIREMENTS_FILE}' not found. Skipping dependency installation.")
 

@@ -1,19 +1,22 @@
 # --- Installation ---
 # Before running, please install the required libraries by running the following command in your terminal:
-# pip install streamlit opencv-python-headless requests numpy Pillow ultralytics deepface
-
+# pip install streamlit opencv-python-headless requests numpy Pillow ultralytics deepface python-dotenv
 import streamlit as st
 import cv2
-import base64
-import requests
 import tempfile
 import numpy as np
-import json
-import os
 import logging
+import os
 from PIL import Image
 from ultralytics import YOLO
-from deepface import DeepFace
+from dotenv import load_dotenv
+
+from analyzers import GeminiAnalyzer, YoloAnalyzer, DeepfaceAnalyzer
+
+# --- Load Environment Variables ---
+# Load environment variables from a .env file if it exists.
+# This is useful for managing API keys and other secrets.
+load_dotenv()
 
 # --- Logging Configuration ---
 # Configure logging to display the time, log level, and message.
@@ -22,6 +25,19 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# --- Model Loading ---
+# Using st.cache_resource ensures the model is loaded only once.
+@st.cache_resource
+def load_yolo_model(model_name):
+    """
+    Loads a YOLO model from the specified path.
+    The model is cached to avoid reloading on every app rerun.
+    """
+    logging.info(f"Loading YOLO model: {model_name}")
+    model = YOLO(model_name)
+    logging.info(f"YOLO model '{model_name}' loaded successfully.")
+    return model
 
 # --- UI Setup ---
 # Configure the Streamlit page with a title and wide layout for better video display.
@@ -53,11 +69,15 @@ yolo_model_name = "yolov8n.pt" # Default model
 
 # Display different UI elements in the sidebar based on the selected model.
 if model_selection == "Gemini":
+    # Get the API key from environment variables, with a fallback to an empty string.
+    default_api_key = os.getenv("GEMINI_API_KEY", "")
+
     # Add a password input field for the Gemini API Key for security.
     api_key_input = st.sidebar.text_input(
         "Gemini API Key", 
-        type="password", 
-        help="You can get your key from Google AI Studio."
+        value=default_api_key,
+        type="password",
+        help="You can get your key from Google AI Studio. For convenience, you can also set it as GEMINI_API_KEY in a .env file."
     )
     if api_key_input:
         st.session_state.gemini_api_key = api_key_input
@@ -108,137 +128,14 @@ elif model_selection == "DeepFace":
 
 # --- Helper Functions ---
 
-# Define the Gemini API URL as a constant for easy modification.
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-
-def get_gemini_analysis(frame: np.ndarray, prompt: str) -> dict | None:
-    """
-    Sends a single frame to the Gemini API for analysis.
-    """
-    logging.info("Attempting Gemini analysis.")
-    api_key = st.session_state.get("gemini_api_key")
-    if not api_key:
-        logging.error("Gemini API Key is missing.")
-        st.error("Please enter your Gemini API Key in the sidebar.")
-        return None
-
-    is_success, buffer = cv2.imencode(".jpg", frame)
-    if not is_success:
-        logging.error("Failed to encode frame to JPEG.")
-        st.error("Failed to encode frame.")
-        return None
-    
-    image_b64 = base64.b64encode(buffer).decode("utf-8")
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}]}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    
-    headers = {"Content-Type": "application/json"}
-    full_api_url = f"{GEMINI_API_URL}?key={api_key}"
-
-    try:
-        logging.info("Sending request to Gemini API.")
-        response = requests.post(full_api_url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
-        logging.info("Received successful response from Gemini API.")
-        result = response.json()
-        
-        if (result.get("candidates") and result["candidates"][0].get("content") and 
-            result["candidates"][0]["content"].get("parts")):
-            json_text = result["candidates"][0]["content"]["parts"][0]["text"]
-            if json_text.startswith("```json"):
-                json_text = json_text[7:-3]
-            logging.info("Successfully parsed Gemini response.")
-            return json.loads(json_text)
-        else:
-            logging.warning("No valid content in Gemini API response.")
-            st.warning("No valid content found in API response.")
-            st.json(result)
-            return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Gemini API request failed: {e}")
-        st.error(f"API request failed: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        logging.error(f"Failed to parse JSON from Gemini response: {e}")
-        st.error(f"Failed to parse JSON from API response: {e}")
-        st.text(f"Received text: {response.text}")
-        return None
-
-def run_deepface_analysis(frame: np.ndarray) -> dict | None:
-    """
-    Runs DeepFace analysis on a single frame for age, gender, and ethnicity.
-    """
-    logging.info("Attempting DeepFace analysis.")
-    try:
-        # DeepFace expects BGR format, which is what OpenCV provides.
-        # It will raise a ValueError if no face is found.
-        results = DeepFace.analyze(
-            img_path=frame,
-            actions=['age', 'gender', 'race'],
-            enforce_detection=True,
-            detector_backend='opencv'
-        )
-
-        detections = []
-        height, width, _ = frame.shape
-
-        # DeepFace returns a list of dicts, one for each detected face
-        for face_data in results:
-            region = face_data['region']
-            x, y, w, h = region['x'], region['y'], region['w'], region['h']
-            
-            box = [x / width, y / height, (x + w) / width, (y + h) / height]
-
-            age = face_data['age']
-            gender = face_data['dominant_gender']
-            race = face_data['dominant_race']
-            label = f"{gender}, {age}, {race}"
-
-            detections.append({
-                "label": label, "box": box, "age": age,
-                "dominant_gender": gender, "dominant_race": race
-            })
-
-        logging.info(f"DeepFace found {len(detections)} faces.")
-        return {"detections": detections}
-
-    except ValueError:
-        logging.info("DeepFace: No face detected in the frame.")
-        return {"detections": []}
-    except Exception as e:
-        logging.error(f"DeepFace analysis failed: {e}")
-        st.warning(f"An error occurred during DeepFace analysis. See console for details.")
-        return None
-
-def run_yolo_detection(frame: np.ndarray, model, confidence_thresh: float):
-    """
-    Runs YOLOv8/v9/v10 object detection on a single frame using the ultralytics library.
-    """
-    logging.info(f"Running YOLO detection with model {model.ckpt_path.split('/')[-1]} and confidence {confidence_thresh}")
-    # Perform inference, specifying confidence and disabling verbose output
-    results = model(frame, conf=confidence_thresh, verbose=False)
-
-    detections = []
-    # Ultralytics returns a list of results, we take the first one for our single image
-    result = results[0]
-
-    # Get bounding boxes, confidences, and class IDs
-    boxes = result.boxes.xyxyn.cpu().numpy()  # Normalized [x_min, y_min, x_max, y_max]
-    confs = result.boxes.conf.cpu().numpy()
-    class_ids = result.boxes.cls.cpu().numpy().astype(int)
-
-    for i in range(len(boxes)):
-        detections.append({
-            "label": model.names[class_ids[i]],
-            "box": boxes[i].tolist(), # The box is already normalized
-            "confidence": float(confs[i])
-        })
-
-    logging.info(f"YOLO found {len(detections)} objects.")
-    return {"detections": detections}
+def _get_label_text(detection: dict) -> str:
+    """Creates a label string from a detection dictionary."""
+    parts = [detection.get("label", "Unknown")]
+    if "emotion" in detection:
+        parts.append(f"({detection['emotion']})")
+    elif "confidence" in detection:
+        parts.append(f"{detection['confidence']:.2f}")
+    return " ".join(parts)
 
 def draw_annotations(frame: np.ndarray, detections: list) -> np.ndarray:
     """
@@ -252,11 +149,7 @@ def draw_annotations(frame: np.ndarray, detections: list) -> np.ndarray:
             start_point = (int(x_min * width), int(y_min * height))
             end_point = (int(x_max * width), int(y_max * height))
             cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
-            label = detection.get("label", "Unknown")
-            if "emotion" in detection:
-                label += f" ({detection['emotion']})"
-            elif "confidence" in detection:
-                label += f" {detection['confidence']:.2f}"
+            label = _get_label_text(detection)
             text_y = start_point[1] - 10 if start_point[1] > 20 else start_point[1] + 20
             cv2.putText(frame, label, (start_point[0], text_y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -277,14 +170,14 @@ def process_image(image_file):
 
     with st.spinner("Analyzing image..."):
         logging.info(f"Processing uploaded image: {image_file.name}")
-        analysis = None
+        try:
+            analysis = analyzer.analyze_frame(frame)
+        except Exception as e:
+            logging.error(f"Analysis failed for uploaded image: {e}", exc_info=True)
+            image_placeholder.empty() # Clear the spinner
+            results_placeholder.error(f"An error occurred during analysis: {e}")
+            st.stop()
 
-        if model_selection == "Gemini":
-            analysis = get_gemini_analysis(frame, prompt)
-        elif model_selection == "YOLO" and yolo_model:
-            analysis = run_yolo_detection(frame, yolo_model, confidence_threshold)
-        elif model_selection == "DeepFace":
-            analysis = run_deepface_analysis(frame)
 
         if analysis and analysis.get("detections"):
             logging.info(f"Found {len(analysis['detections'])} detections in the image.")
@@ -306,22 +199,7 @@ def process_image(image_file):
 
 # --- Main Application Logic ---
 
-# Load YOLO model if selected.
-# Using st.cache_resource ensures the model is loaded only once.
-yolo_model = None
-if model_selection == "YOLO":
-    @st.cache_resource
-    def load_yolo_model(model_name):
-        logging.info(f"Loading YOLO model: {model_name}")
-        try:
-            model = YOLO(model_name)
-            logging.info(f"YOLO model '{model_name}' loaded successfully.")
-            return model
-        except Exception as e:
-            logging.error(f"Error loading YOLO model {model_name}: {e}")
-            st.error(f"Error loading YOLO model: {e}")
-            return None
-    yolo_model = load_yolo_model(yolo_model_name)
+analyzer = None
 
 st.markdown("---")
 input_source = st.radio("Select Input Source", ("Upload an image file", "Upload a video file", "Use live webcam feed"), horizontal=True)
@@ -333,6 +211,25 @@ prompt = (
     "If humans are present, identify their emotions and describe what they are doing. "
     "Provide the output as a JSON object with a key 'detections' which is an array of objects."
 )
+
+try:
+    if model_selection == "Gemini":
+        api_key = st.session_state.get("gemini_api_key")
+        if api_key:
+            analyzer = GeminiAnalyzer(api_key=api_key, prompt=prompt)
+        else:
+            st.warning("Please enter your Gemini API Key in the sidebar to proceed.")
+    elif model_selection == "YOLO":
+        yolo_model = load_yolo_model(yolo_model_name)
+        if yolo_model:
+            analyzer = YoloAnalyzer(model=yolo_model, confidence_threshold=confidence_threshold)
+    elif model_selection == "DeepFace":
+        analyzer = DeepfaceAnalyzer()
+except ValueError as e:
+    st.error(f"Error initializing analyzer: {e}")
+    logging.error(f"Error initializing analyzer: {e}")
+    st.stop()
+
 
 if 'stop' not in st.session_state:
     st.session_state.stop = False
@@ -368,25 +265,23 @@ def process_video(video_capture, is_live=False):
             # --- Analysis Section (runs periodically) ---
             if frame_num % frame_interval == 0:
                 logging.info(f"Processing frame number: {frame_num}")
-                analysis = None
-                if model_selection == "Gemini":
-                    analysis = get_gemini_analysis(frame, prompt)
-                elif model_selection == "YOLO" and yolo_model:
-                    analysis = run_yolo_detection(frame, yolo_model, confidence_threshold)
-                elif model_selection == "DeepFace":
-                    analysis = run_deepface_analysis(frame)
-
-                # If analysis was successful, update the latest results and the JSON display
-                if analysis and analysis.get("detections"):
-                    logging.info(f"Found {len(analysis['detections'])} detections in frame {frame_num}.")
-                    latest_analysis = analysis  # Store the new analysis
+                try:
+                    analysis = analyzer.analyze_frame(frame)
+                    # If analysis was successful, update the latest results and the JSON display
+                    if analysis and analysis.get("detections"):
+                        logging.info(f"Found {len(analysis['detections'])} detections in frame {frame_num}.")
+                        latest_analysis = analysis  # Store the new analysis
+                        with results_placeholder.container():
+                            st.subheader("Latest Analysis Results")
+                            st.json(latest_analysis)
+                    else:
+                        logging.warning(f"No analysis results for frame {frame_num}.")
+                        with results_placeholder.container():
+                            st.warning("No new analysis results for this frame.")
+                except Exception as e:
+                    logging.error(f"Analysis failed for frame {frame_num}: {e}", exc_info=True)
                     with results_placeholder.container():
-                        st.subheader("Latest Analysis Results")
-                        st.json(latest_analysis)
-                else:
-                    logging.warning(f"No analysis results for frame {frame_num}.")
-                    with results_placeholder.container():
-                        st.warning("No new analysis results for this frame.")
+                        st.error(f"An error occurred during analysis: {e}")
 
             # --- Display Section (runs for every frame) ---
             annotated_frame = frame.copy()
@@ -410,14 +305,14 @@ def process_video(video_capture, is_live=False):
 if input_source == "Upload an image file":
     st.session_state.stop = True
     uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
+    if uploaded_file and analyzer:
         logging.info(f"File uploaded: {uploaded_file.name}")
         process_image(uploaded_file)
 
 elif input_source == "Upload a video file":
     st.session_state.stop = True
     uploaded_file = st.file_uploader("Choose a video file", type=["mp4", "mov", "avi"])
-    if uploaded_file:
+    if uploaded_file and analyzer:
         logging.info(f"File uploaded: {uploaded_file.name}")
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
             tfile.write(uploaded_file.read())
@@ -428,7 +323,7 @@ elif input_source == "Use live webcam feed":
     # Use a checkbox for a more intuitive and stateful UI control
     run_webcam = st.checkbox("Start live webcam feed")
 
-    if run_webcam:
+    if run_webcam and analyzer:
         logging.info("Starting webcam feed.")
         video_capture = cv2.VideoCapture(0)
         if not video_capture.isOpened():
