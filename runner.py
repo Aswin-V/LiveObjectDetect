@@ -1,6 +1,8 @@
 import os
 import sys
 import subprocess
+import argparse
+import re
 
 VENV_DIR = ".venv"
 REQUIREMENTS_FILE = "requirements.txt"
@@ -11,12 +13,61 @@ def get_executable(name):
         return os.path.join(VENV_DIR, "Scripts", f"{name}.exe")
     return os.path.join(VENV_DIR, "bin", name)
 
+def get_package_version(python_exe, package_name):
+    """Gets the installed version of a package."""
+    try:
+        result = subprocess.run(
+            [python_exe, "-m", "pip", "show", package_name],
+            capture_output=True, text=True, check=True, encoding='utf-8'
+        )
+        match = re.search(r"Version: ([\d\.]+[\w\.]*)", result.stdout)
+        if match:
+            return match.group(1)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return None
+
+def get_latest_package_version(python_exe, package_name):
+    """Gets the latest version of a package from PyPI."""
+    try:
+        # Using 'pip index versions' is a reliable way to get the latest version
+        result = subprocess.run(
+            [python_exe, "-m", "pip", "index", "versions", package_name],
+            capture_output=True, text=True, check=True, encoding='utf-8'
+        )
+        # The output is typically: `package_name (X.Y.Z)`
+        match = re.search(rf"{re.escape(package_name)} \(([\d\.]+[\w\.]*)\)", result.stdout)
+        if match:
+            return match.group(1)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print(f"Warning: Could not check for the latest version of {package_name}.")
+        return None
+    return None
+
+def update_requirements_file(python_exe, requirements_file):
+    """Updates the requirements.txt file with the current package versions."""
+    print("Updating requirements.txt with current package versions...")
+    with open(requirements_file, 'w', encoding='utf-8') as f:
+        subprocess.run([python_exe, "-m", "pip", "freeze"], stdout=f, check=True)
+    print("requirements.txt updated.")
+
 def main():
     """
-    Sets up the environment and runs the Streamlit application.
+    Sets up the environment and runs the selected application.
     """
-    print("--- Setting up AI Video Analysis Environment (Python Runner) ---")
+    parser = argparse.ArgumentParser(description="Run the AI Video Analysis application.")
+    parser.add_argument(
+        "app_type", 
+        type=str, 
+        default="streamlit", 
+        nargs='?', # makes the argument optional
+        choices=["streamlit", "standalone", "tkinter"],
+        help="The type of application to run: 'streamlit' (web), 'standalone' (OpenCV), or 'tkinter' (Desktop)."
+    )
+    # The standalone app has its own arguments, so we need to allow them
+    args, unknown = parser.parse_known_args()
 
+    print(f"--- Setting up AI Video Analysis Environment (Mode: {args.app_type}) ---")
     # 1. Check for and create the virtual environment if it doesn't exist.
     if not os.path.isdir(VENV_DIR):
         print(f"Virtual environment not found. Creating one at './{VENV_DIR}/'...")
@@ -28,14 +79,12 @@ def main():
 
     # Get paths to executables inside the virtual environment
     python_exe = get_executable("python")
-    streamlit_exe = get_executable("streamlit")
-
     # Ensure pip is installed/upgraded in the virtual environment.
     # This makes the script resilient to corrupted venvs that might be missing pip.
     print("Ensuring 'pip' is available in the virtual environment...")
     ensurepip_result = subprocess.run(
         [python_exe, "-m", "ensurepip", "--upgrade"],
-        capture_output=True, text=True
+        capture_output=True, text=True, encoding='utf-8'
     )
 
     if ensurepip_result.returncode != 0:
@@ -57,15 +106,46 @@ def main():
     # Using "python -m pip" is more robust than calling the pip executable directly.
     if os.path.exists(REQUIREMENTS_FILE):
         print(f"Installing/updating requirements from {REQUIREMENTS_FILE}...")
-        # Upgrade pip and install requirements quietly
-        # Add "--quiet" to not show all the installations in terminal
-        subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pip", "-r", REQUIREMENTS_FILE], check=True)
+        subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+        subprocess.run([python_exe, "-m", "pip", "install", "-r", REQUIREMENTS_FILE], check=True)
     else:
         print(f"Warning: '{REQUIREMENTS_FILE}' not found. Skipping dependency installation.")
 
-    print("\n--- Starting Streamlit Application ---")
-    print(f"Running: {streamlit_exe} run app.py")
-    subprocess.run([streamlit_exe, "run", "app.py"])
+    # --- Check and upgrade ultralytics ---
+    print("\n--- Checking for ultralytics update ---")
+    package_to_check = "ultralytics"
+    installed_version = get_package_version(python_exe, package_to_check)
+    latest_version = get_latest_package_version(python_exe, package_to_check)
+
+    if not installed_version:
+        print(f"{package_to_check} is not installed. It will be installed based on requirements.txt.")
+    elif not latest_version:
+        print(f"Could not check for the latest version of {package_to_check}. Skipping update check.")
+    elif installed_version != latest_version:
+        print(f"New version of {package_to_check} available: {latest_version} (installed: {installed_version}).")
+        print(f"Upgrading {package_to_check}...")
+        subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", package_to_check], check=True)
+        update_requirements_file(python_exe, REQUIREMENTS_FILE)
+    else:
+        print(f"{package_to_check} is up-to-date (version {installed_version}).")
+
+    if args.app_type == "streamlit":
+        print("\n--- Starting Streamlit Application ---")
+        streamlit_exe = get_executable("streamlit")
+        command = [streamlit_exe, "run", "app.py"]
+        print(f"Running: {' '.join(command)}")
+        subprocess.run(command)
+    elif args.app_type == "standalone":
+        print("\n--- Starting Standalone Application ---")
+        # Pass through any unknown arguments to the standalone app
+        command = [python_exe, "standalone_app.py"] + unknown
+        print(f"Running: {' '.join(command)}")
+        subprocess.run(command)
+    elif args.app_type == "tkinter":
+        print("\n--- Starting Tkinter Desktop Application ---")
+        command = [python_exe, "tkinter_app.py"] + unknown
+        print(f"Running: {' '.join(command)}")
+        subprocess.run(command)
 
 if __name__ == "__main__":
     main()

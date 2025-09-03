@@ -1,15 +1,9 @@
 import logging
 import numpy as np
-from .analyzer_base import Analyzer
+from .yolo_base_analyzer import YoloBaseAnalyzer
 
-class YoloAnalyzer(Analyzer):
+class YoloAnalyzer(YoloBaseAnalyzer):
     """Analyzer using the YOLO model."""
-
-    def __init__(self, model, confidence_threshold: float):
-        if not model:
-            raise ValueError("YOLO model is not loaded.")
-        self.model = model
-        self.confidence_threshold = confidence_threshold
 
     def analyze_frame(self, frame: np.ndarray) -> dict | None:
         """
