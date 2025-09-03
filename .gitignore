@@ -203,3 +203,4 @@ cython_debug/
 
 # YOLO models
 yolo*.pt
+TestData/*
