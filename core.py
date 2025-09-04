@@ -62,14 +62,16 @@ YOLO_VALID_SIZES_BY_VERSION = {
     "v8": ['n', 's', 'm', 'l', 'x'],
     "v9": ['c', 'e'],
     "v10": ['n', 's', 'm', 'b', 'l', 'x'],
-    "v11": ['n', 's', 'm', 'l', 'x'] # Assumed based on v8
+    "v11": ['n', 's', 'm', 'l', 'x'],
+    "v12": ['n', 's', 'm', 'l', 'x']
 }
 
 YOLO_VALID_TASKS_BY_VERSION = {
     "v8": ['detect', 'segment', 'pose', 'obb', 'classify'],
     "v9": ['detect', 'segment', 'classify'],
     "v10": ['detect'],
-    "v11": ['detect', 'segment', 'pose', 'obb', 'classify'] # Assumed based on v8
+    "v11": ['detect', 'segment', 'pose', 'obb', 'classify'],
+    "v12": ['detect', 'segment', 'pose', 'obb', 'classify']
 }
 
 YOLO_VERSIONS = list(YOLO_VALID_SIZES_BY_VERSION.keys())
@@ -91,7 +93,11 @@ def create_yolo_analyzer_params(version: str, size: str, task: str, confidence: 
         else:
             task_suffix = f"-{task}"
 
-    model_name = f"yolo{version}{size}{task_suffix}.pt"
+    model_version_str = version
+    if version in ["v11", "v12"]:
+        model_version_str = version.lstrip('v')
+
+    model_name = f"yolo{model_version_str}{size}{task_suffix}.pt"
 
     return {
         "yolo_model_name": model_name,
