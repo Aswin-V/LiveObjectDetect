@@ -1,10 +1,24 @@
-streamlit
+# --- Core Dependencies ---
+# For image/video processing, array manipulation, and image handling.
 opencv-python
-requests
 numpy
 Pillow
+
+# --- AI Model Libraries ---
+# For YOLO models (detection, segmentation, pose, etc.)
 ultralytics
+
+# For facial analysis (age, gender, emotion).
+# This will install TensorFlow as a dependency.
 deepface
-tensorflow
-tf-keras
+
+# For making requests to the Gemini API
+requests
+
+# --- Application Framework ---
+# For the interactive web UI
+streamlit
+
+# --- Utilities ---
+# For loading environment variables (e.g., API keys from .env file)
 python-dotenv

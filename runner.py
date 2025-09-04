@@ -61,13 +61,6 @@ def get_latest_package_version(python_exe, package_name):
         return None
     return None
 
-def update_requirements_file(python_exe, requirements_file):
-    """Updates the requirements.txt file with the current package versions."""
-    print("Updating requirements.txt with current package versions...")
-    with open(requirements_file, 'w', encoding='utf-8') as f:
-        subprocess.run([python_exe, "-m", "pip", "freeze"], stdout=f, check=True)
-    print("requirements.txt updated.")
-
 def main():
     """
     Sets up the environment and runs the selected application.
@@ -142,7 +135,8 @@ def main():
         print(f"New version of {package_to_check} available: {latest_version} (installed: {installed_version}).")
         print(f"Upgrading {package_to_check}...")
         subprocess.run([python_exe, "-m", "pip", "install", "--upgrade", package_to_check], check=True)
-        update_requirements_file(python_exe, REQUIREMENTS_FILE)
+        print(f"Successfully upgraded {package_to_check} to {latest_version}.")
+        print("Note: To pin this version for future installations, please manually update requirements.txt.")
     else:
         print(f"{package_to_check} is up-to-date (version {installed_version}).")
 
