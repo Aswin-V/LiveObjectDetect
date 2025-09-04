@@ -5,7 +5,8 @@ import numpy as np
 import os
 
 from core import (AppController, create_argument_parser, validate_yolo_args,
-                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params)
+                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params,
+                  shutdown_thread_pool)
 from analyzers import YoloBaseAnalyzer
 
 # --- Logging Configuration ---
@@ -132,11 +133,9 @@ class StandaloneApp:
     def _handle_yolo_version_selection(self, version):
         if self.yolo_version != version:
             self.yolo_version = version
-            if self.yolo_task not in self.yolo_valid_tasks[self.yolo_version]:
-                self.yolo_task = self.yolo_valid_tasks[self.yolo_version][0]
-            # Reset size to a valid default for the new version
-            if self.yolo_size not in self.yolo_valid_sizes[self.yolo_version]:
-                self.yolo_size = self.yolo_valid_sizes[self.yolo_version][0]
+            self.yolo_task, self.yolo_size = self.controller.update_yolo_config(
+                self.yolo_version, self.yolo_task, self.yolo_size
+            )
             self._reload_analyzer()
 
     def _handle_yolo_size_selection(self, size):
@@ -392,6 +391,7 @@ class StandaloneApp:
         # --- Cleanup ---
         self.controller.stop_processing()
         cv2.destroyAllWindows()
+        shutdown_thread_pool()
         logging.info("Standalone application finished.")
 
 if __name__ == "__main__":

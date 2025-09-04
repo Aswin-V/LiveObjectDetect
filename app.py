@@ -10,7 +10,11 @@ import os
 from dotenv import load_dotenv
 
 from core import (AppController, YOLO_VERSIONS, YOLO_VALID_TASKS_BY_VERSION,
-                  YOLO_VALID_SIZES_BY_VERSION, create_yolo_analyzer_params)
+                  YOLO_VALID_SIZES_BY_VERSION, create_yolo_analyzer_params,
+                  shutdown_thread_pool)
+
+# --- Register shutdown hook ---
+atexit.register(shutdown_thread_pool)
 
 # --- Load Environment Variables ---
 # Load environment variables from a .env file if it exists.
@@ -57,6 +61,8 @@ api_key_input = ""
 confidence_threshold = 0.25
 yolo_model_name = "yolov8n.pt"
 yolo_task = "detect"
+yolo_version = "v8"
+yolo_size = "n"
 
 # Display different UI elements in the sidebar based on the selected model.
 if model_selection == "Gemini":

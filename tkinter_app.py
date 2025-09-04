@@ -7,7 +7,8 @@ import os
 from PIL import Image, ImageTk
 
 from core import (AppController, create_argument_parser, validate_yolo_args,
-                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params)
+                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params,
+                  shutdown_thread_pool)
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -253,29 +254,31 @@ class TkinterApp(tk.Tk):
         self._toggle_yolo_options()
         return True
 
+    def _update_option_menu(self, menu, variable, new_options):
+        """Helper to update the options in a ttk.OptionMenu."""
+        variable.set(new_options[0] if new_options else "")
+        menu['menu'].delete(0, 'end')
+        for option in new_options:
+            menu['menu'].add_command(label=option, command=lambda value=option: variable.set(value))
+
     def _on_yolo_version_change(self, _=None):
         """Handles YOLO version changes, updating dependent task and size menus."""
         new_version = self.yolo_version_var.get()
 
         # Update tasks menu
         valid_tasks = self._YOLO_VALID_TASKS.get(new_version, [])
-        if self.yolo_task_var.get() not in valid_tasks:
-            self.yolo_task_var.set(valid_tasks[0])
+        self._update_option_menu(self.yolo_task_menu, self.yolo_task_var, valid_tasks)
         
-        task_menu = self.yolo_task_menu["menu"]
-        task_menu.delete(0, "end")
-        for task in valid_tasks:
-            task_menu.add_command(label=task, command=lambda value=task: self.yolo_task_var.set(value))
-
         # Update sizes menu
         valid_sizes = self._YOLO_VALID_SIZES.get(new_version, [])
-        if self.yolo_size_var.get() not in valid_sizes:
-            self.yolo_size_var.set(valid_sizes[0])
-        
-        size_menu = self.yolo_size_menu["menu"]
-        size_menu.delete(0, "end")
-        for size in valid_sizes:
-            size_menu.add_command(label=size, command=lambda value=size: self.yolo_size_var.set(value))
+        self._update_option_menu(self.yolo_size_menu, self.yolo_size_var, valid_sizes)
+
+        # Get the updated task and size from the controller and set them
+        new_task, new_size = self.controller.update_yolo_config(
+            new_version, self.yolo_task_var.get(), self.yolo_size_var.get()
+        )
+        self.yolo_task_var.set(new_task)
+        self.yolo_size_var.set(new_size)
 
         self._handle_model_selection()
 
@@ -419,6 +422,7 @@ class TkinterApp(tk.Tk):
 
     def _on_closing(self):
         self._stop_processing_loop()
+        shutdown_thread_pool()
         self.destroy()
 
 def main():

@@ -129,6 +129,14 @@ def get_thread_pool():
         _thread_pool_executor = ThreadPoolExecutor(max_workers=1)
     return _thread_pool_executor
 
+def shutdown_thread_pool():
+    """Shuts down the global thread pool executor."""
+    global _thread_pool_executor
+    if _thread_pool_executor is not None:
+        _thread_pool_executor.shutdown(wait=True)
+        _thread_pool_executor = None
+        logging.info("Thread pool shut down.")
+
 def _get_label_text(detection: dict) -> str:
     """Creates a label string from a detection dictionary."""
     parts = [detection.get("label", "Unknown")]
@@ -243,6 +251,24 @@ class AppController:
         self.analysis_future = None
         self.executor = get_thread_pool()
         self.frame_interval = 30 # Default analysis interval
+
+    def update_yolo_config(self, version, current_task, current_size):
+        """
+        Updates the YOLO task and size based on the selected version,
+        ensuring they are valid.
+        """
+        valid_tasks = YOLO_VALID_TASKS_BY_VERSION.get(version, [])
+        valid_sizes = YOLO_VALID_SIZES_BY_VERSION.get(version, [])
+
+        new_task = current_task
+        if new_task not in valid_tasks:
+            new_task = valid_tasks[0] if valid_tasks else ""
+
+        new_size = current_size
+        if new_size not in valid_sizes:
+            new_size = valid_sizes[0] if valid_sizes else ""
+
+        return new_task, new_size
 
     def set_analyzer(self, model_selection, **kwargs):
         """Sets the analysis model."""
