@@ -61,7 +61,7 @@ def main():
         type=str, 
         default="streamlit", 
         nargs='?', # makes the argument optional
-        choices=["streamlit", "standalone", "tkinter"],
+        choices=["streamlit", "standalone", "tkinter", "test"],
         help="The type of application to run: 'streamlit' (web), 'standalone' (OpenCV), or 'tkinter' (Desktop)."
     )
     # The standalone app has its own arguments, so we need to allow them
@@ -144,6 +144,11 @@ def main():
     elif args.app_type == "tkinter":
         print("\n--- Starting Tkinter Desktop Application ---")
         command = [python_exe, "tkinter_app.py"] + unknown
+        print(f"Running: {' '.join(command)}")
+        subprocess.run(command)
+    elif args.app_type == "test":
+        print("\n--- Running Test Application ---")
+        command = [python_exe, "test_app.py"] + unknown
         print(f"Running: {' '.join(command)}")
         subprocess.run(command)
 
