@@ -167,7 +167,11 @@ class TkinterApp(tk.Tk):
     def _toggle_yolo_options(self):
         state = 'normal' if self.model_var.get() == "YOLO" else 'disabled'
         for child in self.yolo_frame.winfo_children():
-            child.configure(state=state)
+            try:
+                child.configure(state=state) # type: ignore
+            except tk.TclError:
+                # This widget does not have a 'state' option.
+                pass
 
     def _handle_source_selection(self):
         source = self.source_var.get()
@@ -334,7 +338,10 @@ class TkinterApp(tk.Tk):
                 return
 
             # Convert BGR frames from controller to RGB for display
-            raw_rgb_frame = cv2.cvtColor(raw_bgr_frame, cv2.COLOR_BGR2RGB)
+            raw_rgb_frame = None
+            if raw_bgr_frame is not None:
+                raw_rgb_frame = cv2.cvtColor(raw_bgr_frame, cv2.COLOR_BGR2RGB)
+            
             annotated_rgb_frame = None
             if annotated_bgr_frame is not None:
                 annotated_rgb_frame = cv2.cvtColor(annotated_bgr_frame, cv2.COLOR_BGR2RGB)

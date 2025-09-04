@@ -247,27 +247,45 @@ class StandaloneApp:
             cv2.putText(canvas, "Version:", (x_start + 10, y_pos), font, 0.7, (255, 255, 255), 1)
             y_pos += 30
             versions = YOLO_VERSIONS
+            item_height = 30
+            num_columns = 3
             for i, version in enumerate(versions):
                 is_selected = version == self.yolo_version
                 color = (0, 255, 0) if is_selected else (220, 220, 220)
-                base_x = x_start + 30 + (i * 60)
-                btn_rect = (base_x - 10, y_pos - 15, base_x + 40, y_pos + 10)
+                
+                col = i % num_columns
+                row = i // num_columns
+                base_x = x_start + 40 + (col * 60)
+                base_y = y_pos + (row * item_height)
+
+                btn_rect = (base_x - 20, base_y - 15, base_x + 30, base_y + 10)
                 self.ui_layout['yolo_version_options'][version] = btn_rect
                 
-                cv2.putText(canvas, version, (base_x, y_pos), font, 0.6, color, 1)
-            y_pos += 30
+                cv2.putText(canvas, version, (base_x - 10, base_y), font, 0.6, color, 1)
+            
+            y_pos += ((len(versions) - 1) // num_columns + 1) * item_height
+            y_pos += 15
 
             # Size selection
             cv2.putText(canvas, "Size:", (x_start + 10, y_pos), font, 0.7, (255, 255, 255), 1)
             y_pos += 30
-            sizes = self.yolo_valid_sizes[self.yolo_version]
+            sizes = self.yolo_valid_sizes.get(self.yolo_version, [])
+            item_height = 30
+            num_columns = 4 # Use 4 columns for sizes as they are short
             for i, size in enumerate(sizes):
                 is_selected = size == self.yolo_size
                 color = (0, 255, 0) if is_selected else (220, 220, 220)
-                base_x = x_start + 30 + (i * 40)
-                btn_rect = (base_x - 10, y_pos - 15, base_x + 25, y_pos + 10)
+                
+                col = i % num_columns
+                row = i // num_columns
+                base_x = x_start + 30 + (col * 50)
+                base_y = y_pos + (row * item_height)
+
+                btn_rect = (base_x - 10, base_y - 15, base_x + 25, base_y + 10)
                 self.ui_layout['yolo_size_options'][size] = btn_rect
-                cv2.putText(canvas, size, (base_x, y_pos), font, 0.6, color, 1)
+                cv2.putText(canvas, size, (base_x, base_y), font, 0.6, color, 1)
+            
+            y_pos += ((len(sizes) - 1) // num_columns + 1) * item_height
 
     def run(self):
         if not self._setup_analyzer(): 
