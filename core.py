@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 import argparse
 import os
+import time
 from dotenv import load_dotenv
 
 from analyzers import (
@@ -58,31 +59,34 @@ def create_argument_parser():
 
     return parser
 
-YOLO_VALID_SIZES_BY_VERSION = {
-    "v8": ['n', 's', 'm', 'l', 'x'],
-    "v9": ['c', 'e'],
-    "v10": ['n', 's', 'm', 'b', 'l', 'x'],
-    "v11": ['n', 's', 'm', 'l', 'x'],
-    "v12": ['n', 's', 'm', 'l', 'x']
-}
+# --- YOLO Configuration ---
+class YOLOConfig:
+    """Encapsulates YOLO configuration constants."""
+    VALID_SIZES_BY_VERSION = {
+        "v8": ['n', 's', 'm', 'l', 'x'],
+        "v9": ['c', 'e'],
+        "v10": ['n', 's', 'm', 'b', 'l', 'x'],
+        "v11": ['n', 's', 'm', 'l', 'x'],
+        "v12": ['n', 's', 'm', 'l', 'x']
+    }
 
-YOLO_VALID_TASKS_BY_VERSION = {
-    "v8": ['detect', 'segment', 'pose', 'obb', 'classify'],
-    "v9": ['detect', 'segment', 'classify'],
-    "v10": ['detect'],
-    "v11": ['detect', 'segment', 'pose', 'obb', 'classify'],
-    "v12": ['detect', 'segment', 'pose', 'obb', 'classify']
-}
+    VALID_TASKS_BY_VERSION = {
+        "v8": ['detect', 'segment', 'pose', 'obb', 'classify'],
+        "v9": ['detect', 'segment', 'classify'],
+        "v10": ['detect'],
+        "v11": ['detect', 'segment', 'pose', 'obb', 'classify'],
+        "v12": ['detect', 'segment', 'pose', 'obb', 'classify']
+    }
 
-YOLO_VERSIONS = list(YOLO_VALID_SIZES_BY_VERSION.keys())
+    VERSIONS = list(VALID_SIZES_BY_VERSION.keys())
 
 def validate_yolo_args(parser, args):
     """Validates YOLO-specific arguments and calls parser.error() if invalid."""
     if args.model == "YOLO":
-        if args.yolo_size not in YOLO_VALID_SIZES_BY_VERSION.get(args.yolo_version, []):
-            parser.error(f"Invalid size '{args.yolo_size}' for YOLO {args.yolo_version}. Valid sizes are: {YOLO_VALID_SIZES_BY_VERSION.get(args.yolo_version, [])}")
-        if args.yolo_task not in YOLO_VALID_TASKS_BY_VERSION.get(args.yolo_version, []):
-            parser.error(f"Invalid task '{args.yolo_task}' for YOLO {args.yolo_version}. Valid tasks are: {YOLO_VALID_TASKS_BY_VERSION.get(args.yolo_version, [])}")
+        if args.yolo_size not in YOLOConfig.VALID_SIZES_BY_VERSION.get(args.yolo_version, []):
+            parser.error(f"Invalid size '{args.yolo_size}' for YOLO {args.yolo_version}. Valid sizes are: {YOLOConfig.VALID_SIZES_BY_VERSION.get(args.yolo_version, [])}")
+        if args.yolo_task not in YOLOConfig.VALID_TASKS_BY_VERSION.get(args.yolo_version, []):
+            parser.error(f"Invalid task '{args.yolo_task}' for YOLO {args.yolo_version}. Valid tasks are: {YOLOConfig.VALID_TASKS_BY_VERSION.get(args.yolo_version, [])}")
 
 def create_yolo_analyzer_params(version: str, size: str, task: str, confidence: float) -> dict:
     """Creates a dictionary of parameters for the YOLO analyzer."""
@@ -237,6 +241,7 @@ class AppController:
     or a standalone desktop app.
     """
     def __init__(self):
+        """Initializes the AppController."""
         self.analyzer = None
         self.video_capture = None
         self.is_live = False
@@ -250,15 +255,28 @@ class AppController:
         self.frame_count = 0
         self.analysis_future = None
         self.executor = get_thread_pool()
-        self.frame_interval = 30 # Default analysis interval
+
+        # Analysis rate control
+        self.max_analysis_fps = 16
+        self.last_analysis_submit_time = 0
+
+        # FPS measurement
+        self.analysis_start_time = None
+        self.analysis_frame_count = 0
+        self.measured_analysis_fps = 0.0
+
+    def set_max_analysis_fps(self, fps: int):
+        """Sets the maximum analysis frames per second."""
+        self.max_analysis_fps = int(fps)
+        logging.info(f"Max analysis FPS set to {self.max_analysis_fps}")
 
     def update_yolo_config(self, version, current_task, current_size):
         """
         Updates the YOLO task and size based on the selected version,
         ensuring they are valid.
         """
-        valid_tasks = YOLO_VALID_TASKS_BY_VERSION.get(version, [])
-        valid_sizes = YOLO_VALID_SIZES_BY_VERSION.get(version, [])
+        valid_tasks = YOLOConfig.VALID_TASKS_BY_VERSION.get(version, [])
+        valid_sizes = YOLOConfig.VALID_SIZES_BY_VERSION.get(version, [])
 
         new_task = current_task
         if new_task not in valid_tasks:
@@ -343,7 +361,6 @@ class AppController:
             raise IOError(f"Could not open video file: {video_path}")
         self.is_live = False
         fps = self.video_capture.get(cv2.CAP_PROP_FPS) or 30
-        self.frame_interval = int(fps) if fps > 0 else 30
         logging.info(f"Started video file processing: {video_path} at {fps} FPS.")
 
     def start_webcam(self):
@@ -354,14 +371,15 @@ class AppController:
             self.video_capture = None
             raise IOError("Could not open webcam.")
         self.is_live = True
-        self.frame_interval = 10 # Analyze every 10 frames for webcam
         logging.info("Started webcam processing.")
 
     def start_processing(self):
+        """Sets the processing state to 'running'."""
         if self.video_capture:
             self.processing_state = 'running'
 
     def pause_processing(self):
+        """Sets the processing state to 'paused'."""
         self.processing_state = 'paused'
 
     def stop_processing(self):
@@ -411,6 +429,17 @@ class AppController:
                         self.analyzed_frame_number = frame_num
                         annotated_frame = draw_annotations(analyzed_frame.copy(), analysis.get("detections", []))
                         self.latest_annotated_frame = annotated_frame
+
+                        # --- FPS Measurement ---
+                        if self.analysis_start_time is None:
+                            self.analysis_start_time = time.time()
+                        
+                        self.analysis_frame_count += 1
+                        elapsed_time = time.time() - self.analysis_start_time
+                        if elapsed_time >= 1.0: # Update FPS roughly every second
+                            self.measured_analysis_fps = self.analysis_frame_count / elapsed_time
+                            self.analysis_frame_count = 0
+                            self.analysis_start_time = time.time()
                     else:
                         logging.warning("Async analysis returned no result.")
                 except Exception as e:
@@ -419,11 +448,14 @@ class AppController:
                 self.analysis_future = None
 
             # --- Submit new frame for analysis ---
-            if self.analyzer and self.frame_count % self.frame_interval == 0 and self.analysis_future is None:
-                logging.info(f"Submitting frame {self.frame_count} for async analysis.")
-                self.analysis_future = self.executor.submit(
-                    _analyze_frame_in_thread, self.analyzer, frame.copy(), self.frame_count
-                )
+            current_time = time.time()
+            if self.analyzer and self.analysis_future is None:
+                if (current_time - self.last_analysis_submit_time) >= (1.0 / self.max_analysis_fps):
+                    logging.info(f"Submitting frame {self.frame_count} for async analysis.")
+                    self.analysis_future = self.executor.submit(
+                        _analyze_frame_in_thread, self.analyzer, frame.copy(), self.frame_count
+                    )
+                    self.last_analysis_submit_time = current_time
         
         return True
 

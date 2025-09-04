@@ -9,9 +9,7 @@ import logging
 import os
 from dotenv import load_dotenv
 
-from core import (AppController, YOLO_VERSIONS, YOLO_VALID_TASKS_BY_VERSION,
-                  YOLO_VALID_SIZES_BY_VERSION, create_yolo_analyzer_params,
-                  shutdown_thread_pool)
+from core import (AppController, YOLOConfig, create_yolo_analyzer_params, shutdown_thread_pool)
 
 # --- Register shutdown hook ---
 atexit.register(shutdown_thread_pool)
@@ -87,16 +85,16 @@ if model_selection == "Gemini":
     - Slower due to API calls.
     """)
 elif model_selection == "YOLO":
-    yolo_version = st.sidebar.selectbox("YOLO Version", YOLO_VERSIONS, help="Choose the YOLO architecture.")
+    yolo_version = st.sidebar.selectbox("YOLO Version", YOLOConfig.VERSIONS, help="Choose the YOLO architecture.")
     
     # --- YOLO Task Selection ---
-    valid_tasks = YOLO_VALID_TASKS_BY_VERSION.get(yolo_version, [])
+    valid_tasks = YOLOConfig.VALID_TASKS_BY_VERSION.get(yolo_version, [])
     task_index = valid_tasks.index(st.session_state.yolo_task) if st.session_state.get('yolo_task') in valid_tasks else 0
     yolo_task = st.sidebar.selectbox("Task", valid_tasks, index=task_index, help="Choose the task for the YOLO model.")
     st.session_state.yolo_task = yolo_task
     
     # --- YOLO Size Selection ---
-    valid_sizes = YOLO_VALID_SIZES_BY_VERSION.get(yolo_version, [])
+    valid_sizes = YOLOConfig.VALID_SIZES_BY_VERSION.get(yolo_version, [])
     size_index = valid_sizes.index(st.session_state.yolo_size) if st.session_state.get('yolo_size') in valid_sizes else 0
     yolo_size = st.sidebar.selectbox("Model Size", valid_sizes, index=size_index, help="Nano is fastest, X is most accurate.")
     st.session_state.yolo_size = yolo_size

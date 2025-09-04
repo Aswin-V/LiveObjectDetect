@@ -1,3 +1,20 @@
+"""
+A utility script to set up the environment and run the AI Video Analysis application.
+
+This script automates the following steps:
+1.  Ensures a Python virtual environment exists and creates it if necessary.
+2.  Installs or updates the required packages from the requirements.txt file.
+3.  Checks for the latest version of the 'ultralytics' package and upgrades it if a new version is available.
+4.  Runs the selected application (Streamlit, Tkinter, or Standalone).
+
+Usage:
+    python runner.py [app_type]
+
+Arguments:
+    app_type (str, optional): The type of application to run.
+                              Choices: 'streamlit', 'standalone', 'tkinter', 'test'.
+                              Defaults to 'streamlit'.
+"""
 import os
 import sys
 import subprocess

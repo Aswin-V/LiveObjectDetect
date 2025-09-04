@@ -5,7 +5,7 @@ import numpy as np
 import os
 
 from core import (AppController, create_argument_parser, validate_yolo_args,
-                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params,
+                  YOLOConfig, create_yolo_analyzer_params,
                   shutdown_thread_pool)
 from analyzers import YoloBaseAnalyzer
 
@@ -18,6 +18,12 @@ logging.basicConfig(
 )
 
 class StandaloneApp:
+    """
+    A standalone application for video analysis using an OpenCV-based UI.
+
+    This class encapsulates all the logic for the standalone application,
+    including video capture, UI rendering, and user interaction.
+    """
     def __init__(self, args):
         self.args = args
         self.controller = AppController()
@@ -28,8 +34,8 @@ class StandaloneApp:
         self.yolo_task = args.yolo_task
         self.yolo_version = args.yolo_version
         self.yolo_size = args.yolo_size
-        self.yolo_valid_sizes = YOLO_VALID_SIZES_BY_VERSION
-        self.yolo_valid_tasks = YOLO_VALID_TASKS_BY_VERSION
+        self.yolo_valid_sizes = YOLOConfig.VALID_SIZES_BY_VERSION
+        self.yolo_valid_tasks = YOLOConfig.VALID_TASKS_BY_VERSION
         # --- End Additions ---
 
         # --- UI State ---
@@ -245,7 +251,7 @@ class StandaloneApp:
             # Version selection
             cv2.putText(canvas, "Version:", (x_start + 10, y_pos), font, 0.7, (255, 255, 255), 1)
             y_pos += 30
-            versions = YOLO_VERSIONS
+            versions = YOLOConfig.VERSIONS
             item_height = 30
             num_columns = 3
             for i, version in enumerate(versions):

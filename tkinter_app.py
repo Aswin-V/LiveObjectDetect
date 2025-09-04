@@ -7,7 +7,7 @@ import os
 from PIL import Image, ImageTk
 
 from core import (AppController, create_argument_parser, validate_yolo_args,
-                  YOLO_VERSIONS, YOLO_VALID_SIZES_BY_VERSION, YOLO_VALID_TASKS_BY_VERSION, create_yolo_analyzer_params,
+                  YOLOConfig, create_yolo_analyzer_params,
                   shutdown_thread_pool)
 
 # --- Logging Configuration ---
@@ -17,8 +17,14 @@ logging.basicConfig(
 )
 
 class TkinterApp(tk.Tk):
-    _YOLO_VALID_SIZES = YOLO_VALID_SIZES_BY_VERSION
-    _YOLO_VALID_TASKS = YOLO_VALID_TASKS_BY_VERSION
+    """
+    A desktop application for video analysis using the Tkinter GUI toolkit.
+
+    This class builds the main application window, sidebar controls, and video
+    display areas. It uses the AppController for the core analysis logic.
+    """
+    _YOLO_VALID_SIZES = YOLOConfig.VALID_SIZES_BY_VERSION
+    _YOLO_VALID_TASKS = YOLOConfig.VALID_TASKS_BY_VERSION
 
     def __init__(self, args):
         super().__init__()
@@ -52,19 +58,22 @@ class TkinterApp(tk.Tk):
         self.raw_video_label.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
 
         self.raw_frame_label = ttk.Label(self.video_area, text="Frame: -")
-        self.raw_frame_label.grid(row=2, column=0, pady=(5, 0))
+        self.raw_frame_label.grid(row=2, column=0, pady=(5, 0), sticky="w")
 
         ttk.Label(self.video_area, text="Processed Feed").grid(row=0, column=1, pady=(0, 5))
         self.processed_video_label = ttk.Label(self.video_area)
         self.processed_video_label.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
 
         self.processed_frame_label = ttk.Label(self.video_area, text="Analyzed Frame: -")
-        self.processed_frame_label.grid(row=2, column=1, pady=(5, 0))
+        self.processed_frame_label.grid(row=2, column=1, pady=(5, 0), sticky="w")
+
+        self.analysis_fps_label = ttk.Label(self.video_area, text="Analysis FPS: -")
+        self.analysis_fps_label.grid(row=2, column=1, pady=(5, 0), sticky="e")
 
         # --- JSON Display ---
         self.json_frame = ttk.Frame(self.video_area, padding="5")
         self.json_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-        self.video_area.grid_rowconfigure(1, weight=1)
+        self.video_area.grid_rowconfigure(3, weight=1) # Allow json to expand
 
         self.json_frame.grid_rowconfigure(1, weight=1)
         self.json_frame.grid_columnconfigure(0, weight=1)
@@ -99,7 +108,7 @@ class TkinterApp(tk.Tk):
     def _create_sidebar_widgets(self):
         # --- Input Source Selection ---
         source_frame = ttk.LabelFrame(self.sidebar_frame, text="Input Source", padding="10")
-        source_frame.pack(fill=tk.X, pady=10, ipady=5)
+        source_frame.pack(fill=tk.X, pady=5, ipady=5)
 
         self.source_var = tk.StringVar(value="Webcam")
         sources = ["Webcam", "Video File", "Image File"]
@@ -123,9 +132,21 @@ class TkinterApp(tk.Tk):
         self.pause_resume_button = ttk.Button(controls_frame, text="Pause", command=self._toggle_pause_resume, state=tk.DISABLED)
         self.pause_resume_button.pack(fill=tk.X, pady=5)
 
+        # --- Analysis Settings ---
+        analysis_settings_frame = ttk.LabelFrame(self.sidebar_frame, text="Analysis Settings", padding="10")
+        analysis_settings_frame.pack(fill=tk.X, pady=5, ipady=5)
+
+        self.max_analysis_fps_var = tk.IntVar(value=self.controller.max_analysis_fps)
+        self.max_analysis_fps_label = ttk.Label(analysis_settings_frame, text=f"Max Analysis FPS: {self.max_analysis_fps_var.get()}")
+        self.max_analysis_fps_label.pack(anchor='w')
+        
+        self.max_analysis_fps_scale = ttk.Scale(analysis_settings_frame, from_=1, to=30, variable=self.max_analysis_fps_var, orient=tk.HORIZONTAL, command=self._on_max_fps_change)
+        self.max_analysis_fps_scale.pack(fill=tk.X, pady=2)
+        self.controller.set_max_analysis_fps(self.max_analysis_fps_var.get())
+
         # --- Model Selection ---
         model_frame = ttk.LabelFrame(self.sidebar_frame, text="Model", padding="10")
-        model_frame.pack(fill=tk.X, pady=10, ipady=5)
+        model_frame.pack(fill=tk.X, pady=5, ipady=5)
 
         self.model_var = tk.StringVar(value=self.args.model)
         
@@ -136,7 +157,7 @@ class TkinterApp(tk.Tk):
 
         # --- YOLO Options ---
         self.yolo_frame = ttk.LabelFrame(self.sidebar_frame, text="YOLO Options", padding="10")
-        self.yolo_frame.pack(fill=tk.X, pady=10, ipady=5)
+        self.yolo_frame.pack(fill=tk.X, pady=5, ipady=5)
 
         # Task Selection
         ttk.Label(self.yolo_frame, text="Task:").pack(anchor='w')
@@ -148,7 +169,7 @@ class TkinterApp(tk.Tk):
         # Version
         ttk.Label(self.yolo_frame, text="Version:").pack(anchor='w')
         self.yolo_version_var = tk.StringVar(value=self.args.yolo_version)
-        self.yolo_version_menu = ttk.OptionMenu(self.yolo_frame, self.yolo_version_var, self.args.yolo_version, *YOLO_VERSIONS, command=self._on_yolo_version_change)
+        self.yolo_version_menu = ttk.OptionMenu(self.yolo_frame, self.yolo_version_var, self.args.yolo_version, *YOLOConfig.VERSIONS, command=self._on_yolo_version_change)
         self.yolo_version_menu.pack(fill=tk.X, pady=2)
 
         # Size
@@ -164,6 +185,11 @@ class TkinterApp(tk.Tk):
         self.confidence_scale.pack(fill=tk.X, pady=2)
         
         self._toggle_yolo_options()
+
+    def _on_max_fps_change(self, value):
+        fps = int(float(value))
+        self.max_analysis_fps_label.config(text=f"Max Analysis FPS: {fps}")
+        self.controller.set_max_analysis_fps(fps)
 
     def _toggle_yolo_options(self):
         state = 'normal' if self.model_var.get() == "YOLO" else 'disabled'
@@ -259,7 +285,7 @@ class TkinterApp(tk.Tk):
         variable.set(new_options[0] if new_options else "")
         menu['menu'].delete(0, 'end')
         for option in new_options:
-            menu['menu'].add_command(label=option, command=lambda value=option: variable.set(value))
+            menu['menu'].add_command(label=option, command=tk._setit(variable, option, self._handle_model_selection))
 
     def _on_yolo_version_change(self, _=None):
         """Handles YOLO version changes, updating dependent task and size menus."""
@@ -323,6 +349,7 @@ class TkinterApp(tk.Tk):
 
         self.raw_frame_label.config(text="Frame: -")
         self.processed_frame_label.config(text="Analyzed Frame: -")
+        self.analysis_fps_label.config(text="Analysis FPS: -")
 
         self.pause_resume_button.config(state=tk.DISABLED)
         self._handle_source_selection()
@@ -380,6 +407,7 @@ class TkinterApp(tk.Tk):
             self.raw_frame_label.config(text=f"Frame: {self.controller.frame_count}")
             if self.controller.analyzed_frame_number > 0:
                 self.processed_frame_label.config(text=f"Analyzed Frame: {self.controller.analyzed_frame_number}")
+                self.analysis_fps_label.config(text=f"Analysis FPS: {self.controller.measured_analysis_fps:.1f}")
 
         # Update JSON
         if self.controller.latest_analysis:

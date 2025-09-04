@@ -7,7 +7,7 @@ class YoloAnalyzer(YoloBaseAnalyzer):
 
     def analyze_frame(self, frame: np.ndarray) -> dict | None:
         """
-        Runs YOLOv8/v9/v10 object detection on a single frame using the ultralytics library.
+        Runs YOLO object detection on a single frame using the ultralytics library.
         """
         logging.info(f"Running YOLO detection with model {self.model.ckpt_path.split('/')[-1]} and confidence {self.confidence_threshold}")
         # Perform inference, specifying confidence and disabling verbose output

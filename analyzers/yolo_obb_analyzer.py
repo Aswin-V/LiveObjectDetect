@@ -22,7 +22,7 @@ class YoloObbAnalyzer(YoloBaseAnalyzer):
         confs = result.obb.conf.cpu().numpy()
         class_ids = result.obb.cls.cpu().numpy().astype(int)
         # Get the corner points of the rotated bounding box (normalized)
-        obb_polygons = result.obb.xyxyn
+        obb_polygons = result.obb.xyxyxyxyn
 
         for i in range(len(confs)):
             detections.append({

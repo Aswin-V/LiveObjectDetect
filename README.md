@@ -10,7 +10,7 @@ This is an interactive web application built with Streamlit that performs real-t
   - Use a live webcam feed.
 - **Multiple Analysis Models:**
   - **Gemini:** A powerful, cloud-based multimodal model from Google for general object, emotion, and activity detection.
-  - **YOLO (v8, v9, v10, v11):** State-of-the-art, real-time models that run locally for high performance. Supports multiple tasks:
+  - **YOLO (v8, v9, v10, v11, v12):** State-of-the-art, real-time models that run locally for high performance. Supports multiple tasks:
     - **Detect:** Object Detection
     - **Segment:** Instance Segmentation
     - **Classify:** Image Classification
@@ -54,7 +54,7 @@ The project includes a convenient runner script that sets up a virtual environme
 
 ## 🚀 Usage
 
-The application can be run in two modes: a web-based Streamlit app or a standalone desktop app.
+The application can be run in several modes, providing different user interfaces.
 
 ### Streamlit Web App (Default)
 
@@ -74,9 +74,19 @@ Once running, open the provided URL in your web browser.
 3.  **Select an Input Source:** Choose to upload an image, a video, or use the live webcam feed.
 4.  **Control Processing:** Use the "Start", "Pause", and "Stop" buttons to control the analysis.
 
-### Standalone Desktop App
+### Tkinter Desktop App
 
-This mode runs a high-performance window using OpenCV, showing the live feed and the processed feed side-by-side. It is ideal for performance testing as it has minimal UI overhead.
+A native desktop application built with Python's standard Tkinter GUI toolkit. It offers a more traditional desktop experience compared to the web app and provides full control over all model parameters through the UI.
+
+```bash
+python runner.py tkinter
+```
+
+The Tkinter app also accepts the same command-line arguments as the standalone app for pre-configuring the model and video source (e.g., `python runner.py tkinter -v /path/to/video.mp4`).
+
+### Standalone OpenCV App
+
+This mode runs a high-performance window using OpenCV, showing the live feed and the processed feed side-by-side. It is ideal for performance testing as it has minimal UI overhead, with controls available via mouse clicks and keyboard shortcuts.
 
 ```bash
 # Example with YOLOv8n (default) on webcam
@@ -98,6 +108,14 @@ python runner.py standalone -m Gemini
 **Controls:**
 - Press `p` to pause/resume processing.
 - Press `q` to quit the application.
+
+### Environment Test Utility
+
+A utility to check if all dependencies (OpenCV, TensorFlow, Ultralytics, etc.) are installed correctly and to test the download and loading of YOLO models. This is useful for troubleshooting setup issues.
+
+```bash
+python runner.py test
+```
 
 ## ⚖️ License
 
